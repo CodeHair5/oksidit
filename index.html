@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Three.js Laboratorio Scene</title>
+    <style>
+        :root {
+            --lab-bg-top: #f6f9fb;
+            --lab-bg-mid: #eef3f6;
+            --lab-bg-bottom: #e4f3f6;
+            --lab-vignette-inner: rgba(255,255,255,0.0);
+            --lab-vignette-mid: rgba(230,240,245,0.15);
+            --lab-vignette-outer: rgba(210,222,230,0.38);
+            --lab-noise-opacity: 0.055; /* overall noise alpha */
+        }
+        body { margin: 0; overflow: hidden; position: relative; min-height:100vh; font-family: system-ui, sans-serif; }
+        /* Modern background only when .modern-bg on body */
+        body.modern-bg::before, body.modern-bg::after {
+            content: ""; position: fixed; left:0; top:0; width:100%; height:100%; pointer-events:none; z-index:-3;
+        }
+        body.modern-bg::before {
+            background: linear-gradient(to bottom, var(--lab-bg-top) 0%, var(--lab-bg-mid) 55%, var(--lab-bg-bottom) 100%);
+        }
+        body.modern-bg::after {
+            background: radial-gradient(circle at 50% 40%, var(--lab-vignette-inner) 0%, var(--lab-vignette-mid) 60%, var(--lab-vignette-outer) 100%);
+            z-index:-2;
+            mix-blend-mode: normal;
+        }
+        #bg-noise {
+            display:none; /* hidden by default */
+            position: fixed; left:0; top:0; width:100%; height:100%; z-index:-1; pointer-events:none; opacity: var(--lab-noise-opacity);
+            mix-blend-mode: multiply;
+        }
+        body.modern-bg #bg-noise { display:block; }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: #1f2933; /* dark grey for light background */
+            font-family: monospace;
+            font-size: 16px;
+            text-shadow: 0 1px 0 rgba(255,255,255,0.6);
+        }
+        /* Optional helper class to disable noise quickly */
+        .no-noise #bg-noise { display:none; }
+    </style>
+</head>
+<body>
+    <canvas id="bg-noise"></canvas>
+    <div id="info">Klikkaa letkua valitaksesi/irrottaaksesi sen. Klikkaa kaasupulloa valitaksesi kaasu. Klikkaa jauheastiaa valitaksesi kiinteä aine. 
+        Klikkaa lusikkaan ja sekoitussauvaan käyttääksesi niitä. Voit myös avata/sulkea kaasupullon ja kaasutusastian ventiileitä Näppäimet: R = aloita alusta.</div>
+    <div id="gasMenu" style="display:none; position:absolute; top:50px; left:50%; transform:translateX(-50%); background:#222; color:#fff; padding:12px; border-radius:8px; z-index:10;">
+        <label for="gasSelect">Valitse kaasu:</label>
+        <select id="gasSelect">
+            <option value="O2" selected>O₂</option>
+            <option value="SO2">SO₂</option>
+            <option value="NO2">NO₂</option>
+            <option value="CO2">CO₂</option>
+        </select>
+        <button id="closeGasMenu">Sulje</button>
+    </div>
+    <div id="solidMenu" style="display:none; position:absolute; top:100px; left:50%; transform:translateX(-50%); background:#222; color:#fff; padding:12px; border-radius:8px; z-index:10;">
+        <label for="solidSelect">Valitse kiinteä aine:</label>
+        <select id="solidSelect">
+            <option value="CaO" selected>Kalsiumoksidi (CaO)</option>
+            <option value="Na2O">Natriumoksidi (Na₂O)</option>
+            <option value="MgO">Magnesiumoksidi (MgO)</option>
+        </select>
+        <button id="closeSolidMenu">Sulje</button>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/"
+            }
+        }
+    </script>
+
+        <script type="module">
+// Background noise only if modern background enabled
+if (document.body.classList.contains('modern-bg')) {
+    const noiseCanvas = document.getElementById('bg-noise');
+    if (noiseCanvas) {
+        const ctx = noiseCanvas.getContext('2d');
+        function resizeNoise() { noiseCanvas.width = innerWidth; noiseCanvas.height = innerHeight; }
+        window.addEventListener('resize', resizeNoise); resizeNoise();
+        let frame = 0;
+        function drawNoise() {
+            frame++;
+            if (frame % 3 === 0) {
+                const w = noiseCanvas.width, h = noiseCanvas.height;
+                const imgData = ctx.createImageData(w, h);
+                const data = imgData.data;
+                const stride = 4;
+                for (let y = 0; y < h; y += 2) {
+                    for (let x = 0; x < w; x += stride) {
+                        const i = (y * w + x) * 4;
+                        const v = 228 + ((Math.random()*2)|0);
+                        data[i] = data[i+1] = data[i+2] = v;
+                        data[i+3] = 24;
+                    }
+                }
+                ctx.putImageData(imgData, 0, 0);
+            }
+            if (document.body.classList.contains('modern-bg')) requestAnimationFrame(drawNoise);
+        }
+        requestAnimationFrame(drawNoise);
+    }
+}
+import { initPreloader } from './lib/preloader.js';
+// Initialize preloader early and require both 'assets' and 'tween' readiness
+const preloader = initPreloader({ required: ['assets', 'tween'] });
+import { createLetku } from './letku.js';
+import { createSolidJar } from './solidJar.js';
+import { createTippapullo, decreasePipetteLiquid, refillPipetteLiquid } from './tippapullo.js';
+import { createDekantterilasi } from './dekantterilasi.js';
+// Legacy ripple trigger removed (unified water handles ripples)
+import { createGasTexture } from './lib/textures.js';
+import { RETURN_LOWER_MS } from './lib/constants.js';
+import { createBubblesManager } from './lib/bubbles.js';
+import { createSpaatteli, runSpaatteliSequence, runSpaatteliPour } from './lib/spaatteli.js';
+            
+import { createPowder } from './lib/powder.js';
+import { createScene } from './lib/scene.js';
+import { createSauva, runSauvaSequence, createSauvaAnimator } from './lib/sauva.js';
+            
+import { createAnimationManager } from './lib/animator.js';
+            
+import { createInteractionManager } from './lib/interactionManager.js';
+import { createPipetteAnimator } from './lib/pipetteAnimator.js';
+import { createHoseAnimator } from './lib/hoseAnimator.js';
+import { tweenTo } from './lib/animUtils.js';
+import { createNotifier } from './lib/notifications.js';
+import { createLoop } from './lib/loop.js';
+import { wireInteractions } from './lib/wireInteractions.js';
+import { initMenus } from './lib/uiMenus.js';
+        import * as THREE from 'three';
+        import { createKaasupullo } from './kaasupullo.js';
+
+
+    // 1. SCENEN ALUSTUS (scene builds; start button will reveal)
+        const { scene, camera, renderer, controls } = createScene();
+
+        // Apumuuttujat ja tilat
+let gasLabelSprite = null;
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        let isPipetteRaised = false;
+        let isAnimatingDropper = false;
+    const dropperOriginPosition = new THREE.Vector3(0, 0, 2);
+    const hoseRestingPoint = new THREE.Vector3(-1, 0.1, 0);
+    // Centralized interaction state used by wireInteractions and loop
+    const state = {
+        isBeakerTapOpen: false,
+        isGasValveOpen: false,
+        isHoseAttached: false,
+        isHoseSelected: false,
+        selectedGas: 'O2',
+        selectedSolid: 'CaO',
+        hoseRestingPoint,
+        hoseEndPoint: null,
+        updateHose: null,
+        hoseMesh: null
+    };
+
+    // Add notifier for UI messages
+    const notify = createNotifier(document.getElementById('info'));
+    // Initialize menus (gas + solid)
+    initMenus({
+        onGasChange: (val) => {
+            state.selectedGas = val;
+            try {
+                if (cylinderBody?.material) {
+                    const tex = createGasTexture(val);
+                    cylinderBody.material.map = tex;
+                    cylinderBody.material.needsUpdate = true;
+                }
+            } catch {}
+        },
+        onSolidChange: (val) => {
+            state.selectedSolid = val;
+            try { notify.info(`Kiinteä valittu: ${state.selectedSolid}`, { duration: 1200 }); } catch {}
+            try { if (solidJar?.setPowderType) solidJar.setPowderType(state.selectedSolid); } catch {}
+        },
+        notify
+    });
+
+    // 2. 3D-OBJEKTIEN LUONTI
+
+        // --- Kaasupullo ---
+    // Kaasupullon luonti erillisestä moduulista
+    const { gasCylinderGroup, gasHoseAttachmentPoint, cylinderBody } = createKaasupullo(scene);
+    
+    // Aseta oletus kaasutekstuuri (O₂)
+    // createGasTexture imported
+    
+    // Aseta alustava O₂ tekstuuri
+    cylinderBody.material.map = createGasTexture('O₂');
+    cylinderBody.material.transparent = false;
+    cylinderBody.material.opacity = 1;
+    cylinderBody.material.needsUpdate = true;
+
+        // --- Dekantterilasi (Beaker) ---
+    // Dekantterilasin luonti erillisestä moduulista
+    const { beakerGroup, beakerNozzle, water, unifiedWater, updateWater, waterHeight, meniscus, meniscusUnder, meniscusPositions, originalMeniscusPositions, waterSurfaceY, beakerRadius, beakerHeight, addIndicatorAt, stepIndicator, addAcidicGas, resetWater, addDiffusionSource, particlesUpdate, addBasicPowderEffect, revealPendingPH, addEventPlume, clearEvents, getPostMixColorHex, diffusionManager } = createDekantterilasi(scene);
+    // Rebind bubbles manager now that beaker is available
+    const bubblesManagerReal = createBubblesManager({ scene, beakerGroup, beakerRadius, waterSurfaceY });
+    // Replace placeholder reference
+    // eslint-disable-next-line no-undef
+    window._bubbles = bubblesManagerReal;
+    
+    // Make beaker globally available for keyboard controls
+    window.currentBeaker = { addIndicatorAt, stepIndicator, addAcidicGas, resetWater, addBasicPowderEffect, revealPendingPH, addEventPlume, clearEvents, getPostMixColorHex, updateWater, unifiedWater, getChemState: (() => ({ hasIndicator: (unifiedWater?.material?.uniforms?.uIndicatorEnabled?.value ?? 0) > 0.5, pHScore: (unifiedWater?.material?.uniforms?.uPHScore?.value ?? 0) })) };
+
+    // --- Kiinteä aineen purkki (moduulista) ---
+    const solidJar = createSolidJar({ position: new THREE.Vector3(beakerGroup.position.x + 3.0, 0.7, beakerGroup.position.z - 1.5), solidCode: state.selectedSolid });
+    scene.add(solidJar.group);
+    // Powder jar shadows
+    try { solidJar.group.traverse(o => { if (o.isMesh) { o.castShadow = true; } }); } catch {}
+    const solidSample = solidJar.powderMesh;
+
+        // --- Tippapullo (Dropper Bottle) ---
+    // Tippapullon luonti erillisestä moduulista
+    const { dropperBottleGroup, pipetteAssembly, bottleHeight, pipetteLiquid, modelScale } = createTippapullo(scene, dropperOriginPosition);
+    // Dropper bottle shadows
+    try { dropperBottleGroup.traverse(o => { if (o.isMesh) { o.castShadow = true; } }); } catch {}
+    
+    // Tee pipetteLiquid globaaliksi, jotta se on käytettävissä funktioissa
+    window.pipetteLiquid = pipetteLiquid;
+
+        // --- LETKU (HOSE) ---
+    const { updateHose } = createLetku(scene, gasCylinderGroup.getObjectByName('gasNozzle'), beakerNozzle, hoseRestingPoint, state.isHoseAttached);
+    state.updateHose = updateHose;
+    state.hoseEndPoint = new THREE.Vector3().copy(state.hoseRestingPoint);
+    state.hoseMesh = state.updateHose(state.hoseEndPoint, state.isHoseAttached);
+
+    // Animators
+    const pipetteAnimator = createPipetteAnimator({
+        scene,
+        dropperBottleGroup,
+        bottleHeight,
+        beakerGroup,
+        beakerHeight,
+        water,
+        waterHeight,
+        meniscus,
+        meniscusUnder,
+        beakerRadius,
+        modelScale,
+        addIndicatorAt,
+        addDiffusionSource,
+        refillPipetteLiquid
+    });
+    const hoseAnimator = createHoseAnimator({
+        hoseEndPointRef: state.hoseEndPoint,
+        hoseRestingPointRef: state.hoseRestingPoint,
+        beakerNozzle,
+        updateCallback: () => { state.hoseMesh = state.updateHose(state.hoseEndPoint, state.isHoseAttached); }
+    });
+
+        // --- Kiinteä aine (näyte) + Spaatteli ---
+
+    const spatula = createSpaatteli(scene);
+    const animationManager = createAnimationManager();
+    // --- Sekoittajansauva (stirring rod) ---
+    const sauva = createSauva(scene);
+    const sauvaAnimator = createSauvaAnimator(sauva);
+    // Powder system (single owner)
+    const powder = createPowder(scene);
+    try { if (powder && diffusionManager && powder.setDiffusionManager) { powder.setDiffusionManager(diffusionManager); } } catch {}
+    // Optional: expose for quick console verification
+    try { window.diffusionManager = diffusionManager; } catch {}
+    // Debug: expose powder globally for console (fallback if wrapper not used)
+    try { if (!window.powder) window.powder = powder; window.__powderLast = powder; } catch {}
+    // Expose for modules that cannot import it directly (simple signal only)
+    // eslint-disable-next-line no-undef
+    window._powder = powder;
+    // Place rod on table, front-right area
+    {
+        const tableY = 0.01;
+        const restPos = new THREE.Vector3(2.0, tableY, 2.0);
+        const yaw = -Math.PI * 0.15; // slight diagonal
+        sauva.placeOnTable(restPos, { yaw, tiltX: 0, tiltZ: 0.02 });
+    }
+        // Place spatula on the table horizontally near the jar
+        if (spatula && typeof spatula.placeOnTable === 'function') {
+            // Place spatula beside the jar but a bit further away from the beaker side
+            // Assume table (floor plane) y is ~0; slight lift to avoid z-fighting
+            const tableY = 0.01;
+            // Place clearly further from the powder jar: a bit to the side and towards the camera (etualalle)
+            const offsetFromJar = new THREE.Vector3(1.4, 0, 1.0);
+            const restPos = new THREE.Vector3().copy(solidJar.group.position).add(offsetFromJar);
+            restPos.y = tableY;
+            // Realistic rest with diagonal yaw; pitch is auto-solved so both contacts touch table
+            const yaw = Math.PI * 0.28;   // slight diagonal
+            const tiltX = -0.02;          // fine-tune pitch if needed on top of auto-solve
+            const tiltZ = 0.06;           // small roll
+            spatula.placeOnTable(restPos, { yaw, tiltX, tiltZ });
+        }
+
+        // 3. HIIRI-EVENTIT JA VUOROVAIKUTUS (kapseloitu wireInteractions-moduuliin)
+        const im = createInteractionManager({ scene, camera, dom: window });
+
+        // Callback: beaker interactions previously inline
+        const onBeakerClick = () => {
+            if (state.isHoseSelected) {
+                state.isHoseAttached = true;
+                state.isHoseSelected = false;
+                state.hoseMesh.material.color.set(0x222222);
+                const beakerNozzleWorld = new THREE.Vector3();
+                beakerNozzle.getWorldPosition(beakerNozzleWorld);
+                state.hoseEndPoint.copy(beakerNozzleWorld);
+                state.hoseMesh = state.updateHose(state.hoseEndPoint, state.isHoseAttached);
+                notify.success('Letku kiinnitetty!', { duration: 1400 });
+            } else if (sauva?.state?.isSelected && !animationManager.isRunning('sauva')) {
+                animationManager.run('sauva', () => {
+                    const p = sauvaAnimator.stirAtBeaker({ beakerGroup, beakerRadius, waterSurfaceY, durationSec: 6 });
+                    setTimeout(() => {
+                        if (powder?.hasPowder?.()) {
+                            const center = new THREE.Vector3();
+                            beakerGroup.getWorldPosition(center);
+                            powder.startSwirl({ centerWorld: center, durationSec: 2.2, strength: 0.48, inward: 0.10, drag: 0.85, dissolve: true, dissolveDurationSec: 2.0 });
+                        }
+                    }, 1700);
+                    setTimeout(() => {
+                        const center = new THREE.Vector3();
+                        beakerGroup.getWorldPosition(center);
+                        try {
+                            const center = new THREE.Vector3();
+                            beakerGroup.getWorldPosition(center);
+                            unifiedWater?.userData?.triggerRipple && unifiedWater.userData.triggerRipple(center);
+                        } catch {}
+                        try {
+                            if (window.currentBeaker) {
+                                if (typeof window.currentBeaker.clearEvents === 'function') window.currentBeaker.clearEvents();
+                                if (typeof window.currentBeaker.revealPendingPH === 'function') window.currentBeaker.revealPendingPH();
+                            }
+                        } catch {}
+                    }, 1650);
+                    return p;
+                }).then(() => {
+                    sauva.state.isSelected = false;
+                    notify.clear();
+                });
+            } else if (spatula?.state?.isSelected && !spatula.state.isAnimating) {
+                if (!spatula.state.hasPowder) {
+                    try { notify.warning('Lusikka on tyhjä – käy jauheastialla ensin.', { duration: 1800 }); } catch {}
+                    return true; }
+                animationManager.run('spatula', () => runSpaatteliPour({
+                    spatula,
+                    beakerGroup,
+                    beakerRadius,
+                    waterSurfaceY,
+                    onPour: (hitWorld) => {
+                        const beakerPos = new THREE.Vector3();
+                        beakerGroup.getWorldPosition(beakerPos);
+                        // Use water bottom (surface minus water height) as the settling floor
+                        const bottomYWorld = (waterSurfaceY - waterHeight) + 0.005;
+                        const centerWorld = beakerPos.clone();
+                        powder.spawnAt(hitWorld, {
+                            bottomYWorld,
+                            centerWorld,
+                            beakerRadius,
+                            waterSurfaceY,
+                            beakerGroup,
+                            onEnterWater: (entryWorld) => {
+                                try { unifiedWater?.userData?.triggerRipple && unifiedWater.userData.triggerRipple(entryWorld); } catch {}
+                            }
+                        });
+                        try {
+                            const basicSet = new Set(['CaO','Na2O','MgO']);
+                            if (basicSet.has(state.selectedSolid)) {
+                                if (window.currentBeaker && typeof window.currentBeaker.addBasicPowderEffect === 'function') {
+                                    window.currentBeaker.addBasicPowderEffect();
+                                }
+                            }
+                            try { if (notify) notify.info('Sekoita, jotta väri näkyy.', { duration: 2600 }); } catch {}
+                            try {
+                                const localHit = beakerGroup.worldToLocal(hitWorld.clone());
+                                const addPlume = window.currentBeaker.addEventPlume;
+                                const getColor = window.currentBeaker.getPostMixColorHex;
+                                const indicatorOn = uniforms?.uIndicatorEnabled?.value > 0.5;
+                                if (typeof addPlume === 'function' && typeof getColor === 'function' && indicatorOn) {
+                                    const colorHex = getColor();
+                                    setTimeout(() => { addPlume(localHit.x, localHit.z, colorHex, 120); }, 900);
+                                }
+                            } catch {}
+                        } catch {}
+                    }
+                })).then(() => {
+                    notify.clear();
+                });
+            } else if (isPipetteRaised) {
+                isAnimatingDropper = true;
+                animationManager.run('pipette', () => pipetteAnimator.transfer().then(() => {
+                    const assembly = dropperBottleGroup.getObjectByName('pipetteAssembly');
+                    return tweenTo(assembly.position, { y: bottleHeight }, RETURN_LOWER_MS, TWEEN.Easing.Bounce.Out);
+                }).then(() => {
+                    isPipetteRaised = false;
+                    isAnimatingDropper = false;
+                }))
+            }
+            return true;
+        };
+
+        // Callback: dropper bottle click
+        const onDropperClick = () => {
+            const assembly = dropperBottleGroup.getObjectByName('pipetteAssembly');
+            if (!assembly) return;
+            const targetY = isPipetteRaised ? bottleHeight : bottleHeight + 0.7;
+            const easing = TWEEN.Easing.Bounce.Out;
+            animationManager.run('pipette', () => tweenTo(assembly.position, { y: targetY }, 300, easing).then(() => {
+                isPipetteRaised = !isPipetteRaised;
+                if (isPipetteRaised) {
+                    try { notify.info('Indikaattori valittu, klikkaa kaasutusastiaa lisätäksesi indikaattoria.', { duration: 3000 }); } catch {}
+                }
+            }));
+        };
+
+        // Wire all interactions via helper
+        wireInteractions({
+            im,
+            scene,
+            notify,
+            objects: {
+                gasCylinderGroup,
+                beakerGroup,
+                beakerNozzle,
+                meniscus,
+                meniscusUnder,
+                dropperBottleGroup,
+                solidJar,
+                solidSample,
+                spatula,
+                sauva,
+                hoseRestingPoint
+            },
+            managers: {
+                animationManager,
+                hoseAnimator,
+                pipetteAnimator,
+                powder,
+                tweenTo
+            },
+            callbacks: {
+                state,
+                runSpaatteliSequence: () => runSpaatteliSequence({
+                    spatula,
+                    solidMesh: solidSample,
+                    beakerGroup,
+                    beakerRadius,
+                    waterSurfaceY
+                }),
+                onBeakerClick,
+                onDropperClick
+            }
+        });
+        
+
+        const tweenScript = document.createElement('script');
+        tweenScript.src = 'https://cdn.jsdelivr.net/npm/@tweenjs/tween.js@18.6.4/dist/tween.umd.js';
+        document.head.appendChild(tweenScript);
+
+    // Clicks handled by interaction manager
+        // Resize handled inside createScene()
+
+        // 4. ANIMAATIOLOOPPI (moduuliin kapseloitu)
+        const loop = createLoop({
+            renderer, scene, camera,
+            updates: [
+                ({ deltaTime, elapsedTime }) => { try { controls.update(); } catch {} },
+                () => { try { state.hoseMesh = state.updateHose(state.hoseEndPoint, state.isHoseAttached); } catch {} },
+                ({ elapsedTime }) => { try {
+                    if (state.isHoseAttached && state.isGasValveOpen && state.isBeakerTapOpen) {
+                        bubblesManagerReal.spawnIf({
+                            flowOn: true,
+                            elapsedTime,
+                            selectedGas: state.selectedGas,
+                            onAcidic: () => window.currentBeaker && window.currentBeaker.addAcidicGas()
+                        });
+                    }
+                } catch {} },
+                ({ elapsedTime }) => { try { bubblesManagerReal.update(elapsedTime); } catch {} },
+                // Unified water update (diffusion + ripple time)
+                ({ deltaTime, elapsedTime }) => { try { if (typeof updateWater === 'function') updateWater(deltaTime, elapsedTime); } catch {} },
+                ({ deltaTime }) => { try { if (typeof particlesUpdate === 'function') particlesUpdate(deltaTime); } catch {} },
+                ({ deltaTime }) => { try { spatula?.update?.(deltaTime); } catch {} },
+                ({ deltaTime }) => { try { powder?.update?.(deltaTime); } catch {} },
+                ({ deltaTime }) => { try { sauva?.update?.(deltaTime); } catch {} }
+            ]
+        });
+
+        // Precompile on full asset load to avoid first-frame jank
+        try {
+            const oldOnLoad = THREE.DefaultLoadingManager.onLoad;
+            THREE.DefaultLoadingManager.onLoad = () => {
+                try { oldOnLoad?.(); } catch {}
+                try { renderer.compile(scene, camera); } catch {}
+            }
+        } catch {}
+
+        tweenScript.onload = () => {
+            preloader.signalReady('tween');
+            preloader.waitForStart().then(() => {
+                                // Caustic debug helpers (require beakerGroup created)
+                                                // Caustic helpers removed (feature disabled); file retained for possible later use.
+                loop.start();
+            });
+        };
+
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="fi">
+
+<head>
+    <title>Three.js Tippapullo Animaatiolla</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <style>
+        body {
+            color: #fff;
+            font-family: Monospace;
+            font-size: 13px;
+            text-align: center;
+            font-weight: bold;
+            background-color: #222;
+            margin: 0px;
+            overflow: hidden;
+        }
+
+        #info {
+            position: absolute;
+            top: 0px;
+            width: 100%;
+            padding: 10px;
+            box-sizing: border-box;
+            pointer-events: none;
+            text-shadow: 1px 1px 2px #000;
+        }
+
+        a {
+            color: #0080ff;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="info">Klikkaa pulloa tiputtaaksesi pisaroita</div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/",
+                "tween": "https://unpkg.com/@tweenjs/tween.js@23.1.2/dist/tween.esm.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import * as TWEEN from 'tween';
+        
+        let camera, scene, renderer;
+        let bottleGroup, pipetteGroup, pipetteLiquidMesh, tipEnd;
+        let drops = [];
+        let isAnimating = false;
+
+        const originalLiquidPos = new THREE.Vector3();
+        const scaleFactor = 0.5; // Kaikki mitat pienennetään 50%
+
+        // Siirretty globaaliksi, jotta funktiot kuten startDroppingAnimation löytävät nämä
+        const bodyRadius = 2 * scaleFactor;
+        const bodyHeight = 4 * scaleFactor;
+        const shoulderHeight = 2.5 * scaleFactor;
+        const neckHeight = 0.8 * scaleFactor;
+        const neckRadius = 0.8 * scaleFactor;
+
+
+        init();
+        animate();
+
+        function init() {
+            // --- SCENE SETUP ---
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x222222);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // --- CAMERA ---
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 5 * scaleFactor, 15 * scaleFactor);
+
+            // --- CONTROLS ---
+            const controls = new OrbitControls(camera, renderer.domElement);
+            controls.target.set(0, 4 * scaleFactor, 0);
+            controls.update();
+
+            // --- LIGHTS ---
+            scene.add(new THREE.AmbientLight(0x888888));
+            const pointLight = new THREE.PointLight(0xffffff, 2);
+            pointLight.position.set(10, 20, 5);
+            scene.add(pointLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+            dirLight.position.set(-10, 15, -5);
+            scene.add(dirLight);
+
+            // --- MATERIALS ---
+            const bottleGlassMaterial = new THREE.MeshPhysicalMaterial({
+                color: 0x654321, // Ruskea lasi
+                metalness: 0.1,
+                roughness: 0.05,
+                transmission: 0.9,
+                transparent: true,
+                ior: 1.5,
+                depthWrite: true // PALAUTETTU: Pipetti ei näy pullon läpi
+            });
+
+            const pipetteGlassMaterial = new THREE.MeshPhysicalMaterial({
+                color: 0xe0ffff,
+                metalness: 0,
+                roughness: 0,
+                transmission: 0.9,
+                transparent: true,
+                ior: 1.52,
+                reflectivity: 0.9,
+                depthWrite: false // Estää peittämästä nestettä
+            });
+
+            const capMaterial = new THREE.MeshStandardMaterial({
+                color: 0x333333,
+                roughness: 0.8
+            });
+
+            const rubberMaterial = new THREE.MeshStandardMaterial({
+                color: 0x1a1a1a,
+                roughness: 0.9
+            });
+            
+             const liquidMaterial = new THREE.MeshPhysicalMaterial({
+                color: 0x004d00, // Vaihdettu tummanvihreäksi
+                metalness: 0,
+                roughness: 0.4,
+                transparent: true,
+                opacity: 0.9, // Pidetään hieman läpikuultavana
+                ior: 1.33,
+                depthWrite: false // Estää lasia peittämästä tätä
+            });
+
+
+            // --- GEOMETRY & MESHES ---
+            bottleGroup = new THREE.Group();
+            scene.add(bottleGroup);
+
+            // --- PULLON MUOTO (LatheGeometry) ---
+            const bottleProfile = new THREE.Shape();
+            const wallThickness = 0.1 * scaleFactor;
+
+            // Ulkoseinä
+            bottleProfile.moveTo(0, 0);
+            bottleProfile.lineTo(bodyRadius, 0);
+            bottleProfile.lineTo(bodyRadius, bodyHeight);
+            bottleProfile.splineThru([
+                new THREE.Vector2(bodyRadius * 0.95, bodyHeight + shoulderHeight * 0.5),
+                new THREE.Vector2(neckRadius, bodyHeight + shoulderHeight)
+            ]);
+            bottleProfile.lineTo(neckRadius, bodyHeight + shoulderHeight + neckHeight);
+            
+            // Aukko ja sisäseinä
+            bottleProfile.lineTo(neckRadius - wallThickness, bodyHeight + shoulderHeight + neckHeight);
+            bottleProfile.lineTo(neckRadius - wallThickness, bodyHeight + shoulderHeight);
+            bottleProfile.splineThru([
+                 new THREE.Vector2((bodyRadius - wallThickness) * 0.95, bodyHeight + shoulderHeight * 0.5),
+                 new THREE.Vector2(bodyRadius - wallThickness, bodyHeight)
+            ]);
+            bottleProfile.lineTo(bodyRadius - wallThickness, wallThickness);
+            bottleProfile.lineTo(0, wallThickness);
+
+            const bottleGeometry = new THREE.LatheGeometry(bottleProfile.getPoints(30), 64);
+            const bottleMesh = new THREE.Mesh(bottleGeometry, bottleGlassMaterial);
+            bottleGroup.add(bottleMesh);
+
+            // --- TARRA ---
+            const labelCanvas = document.createElement('canvas');
+            const context = labelCanvas.getContext('2d');
+            labelCanvas.width = 256;
+            labelCanvas.height = 128;
+            context.fillStyle = 'white';
+            context.fillRect(0, 0, labelCanvas.width, labelCanvas.height);
+            context.font = 'bold 60px Arial';
+            context.fillStyle = 'black';
+            context.textAlign = 'center';
+            context.textBaseline = 'middle';
+            context.fillText('NaOH', labelCanvas.width / 2, labelCanvas.height / 2);
+
+            const labelTexture = new THREE.CanvasTexture(labelCanvas);
+            labelTexture.needsUpdate = true;
+            const labelMaterial = new THREE.MeshBasicMaterial({ map: labelTexture, side: THREE.FrontSide });
+            const labelRadius = bodyRadius + 0.01 * scaleFactor;
+            const labelHeight = 1.5 * scaleFactor;
+            const labelAngle = Math.PI / 2.5;
+            const labelGeometry = new THREE.CylinderGeometry(labelRadius, labelRadius, labelHeight, 32, 1, true, -labelAngle / 2, labelAngle);
+            const labelMesh = new THREE.Mesh(labelGeometry, labelMaterial);
+            labelMesh.position.y = bodyHeight / 2;
+            bottleGroup.add(labelMesh);
+
+
+            // --- PIPETIN OSAT (LIIKKUVA) ---
+            pipetteGroup = new THREE.Group();
+            bottleGroup.add(pipetteGroup);
+
+            const capHeight = 0.6 * scaleFactor;
+            const capRadius = neckRadius + 0.05 * scaleFactor;
+            const capY = bodyHeight + shoulderHeight + neckHeight - capHeight / 2;
+            const capGeometry = new THREE.CylinderGeometry(capRadius, capRadius, capHeight, 32);
+            const capMesh = new THREE.Mesh(capGeometry, capMaterial);
+            capMesh.position.y = capY;
+            pipetteGroup.add(capMesh);
+
+            const rubberRadius = capRadius * 0.9;
+            // Position the sphere on top of the cap, slightly embedded
+            const rubberY = capY + capHeight / 2 + rubberRadius * 0.8;
+            const rubberGeometry = new THREE.SphereGeometry(rubberRadius, 32, 16); // Changed to a full sphere
+            const rubberMesh = new THREE.Mesh(rubberGeometry, rubberMaterial);
+            rubberMesh.position.y = rubberY;
+            // No rotation needed anymore
+            pipetteGroup.add(rubberMesh);
+            
+            const pipetteLength = (bodyHeight + shoulderHeight) * 0.95;
+            const pipetteRadius = neckRadius * 0.6;
+            const pipetteY = capY - capHeight / 2 - pipetteLength / 2;
+            const pipetteGeometry = new THREE.CylinderGeometry(pipetteRadius, pipetteRadius, pipetteLength, 16);
+            const pipetteMesh = new THREE.Mesh(pipetteGeometry, pipetteGlassMaterial);
+            pipetteMesh.position.y = pipetteY;
+            pipetteGroup.add(pipetteMesh);
+
+            const tipHeight = 0.5 * scaleFactor;
+            const tipY = pipetteY - pipetteLength / 2;
+            const tipGeometry = new THREE.ConeGeometry(pipetteRadius, tipHeight, 16);
+            const tipMesh = new THREE.Mesh(tipGeometry, pipetteGlassMaterial);
+            // KORJATTU SIJAINTI: Siirretään kartiota alaspäin oman korkeutensa puolikkaan verran,
+            // jotta sen yläreuna (pohja) täsmää sylinterin alareunaan.
+            tipMesh.position.y = tipY - tipHeight / 2;
+            tipMesh.rotation.x = Math.PI; // Käännetään kärki oikein päin
+            pipetteGroup.add(tipMesh);
+
+            // LISÄTTY: Neste kartiomaisessa kärjessä (pysyvä)
+            const liquidTipGeometry = new THREE.ConeGeometry(pipetteRadius * 0.9, tipHeight, 16);
+            const liquidTipMesh = new THREE.Mesh(liquidTipGeometry, liquidMaterial);
+            liquidTipMesh.position.y = tipMesh.position.y; // Sama sijainti kuin lasikärjellä
+            liquidTipMesh.rotation.x = Math.PI;
+            pipetteGroup.add(liquidTipMesh);
+            
+            // Apupiste pisaroiden luontia varten
+            tipEnd = new THREE.Object3D();
+            // Päivitetään myös apupisteen sijainti vastaamaan kartion kärkeä.
+            tipEnd.position.y = tipY - tipHeight; 
+            pipetteGroup.add(tipEnd);
+
+            // Pipetin neste
+            const pipetteLiquidHeight = pipetteLength * 0.9;
+            const pipetteLiquidGeometry = new THREE.CylinderGeometry(pipetteRadius * 0.9, pipetteRadius * 0.9, pipetteLiquidHeight, 16);
+            pipetteLiquidMesh = new THREE.Mesh(pipetteLiquidGeometry, liquidMaterial);
+            pipetteLiquidMesh.position.y = capY - capHeight / 2 - pipetteLiquidHeight / 2 - (pipetteLength - pipetteLiquidHeight);
+            pipetteGroup.add(pipetteLiquidMesh);
+            originalLiquidPos.copy(pipetteLiquidMesh.position); // Tallenna alkuperäinen sijainti
+
+
+            // --- EVENT LISTENERS ---
+            renderer.domElement.addEventListener('click', onBottleClick, false);
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+        
+        function onBottleClick(event) {
+            if (isAnimating) return;
+
+            const mouse = new THREE.Vector2();
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(mouse, camera);
+
+            const intersects = raycaster.intersectObjects(bottleGroup.children, true);
+
+            if (intersects.length > 0) {
+                startDroppingAnimation();
+            }
+        }
+        
+        function createDrop() {
+            const dropGeometry = new THREE.SphereGeometry(0.15 * scaleFactor, 16, 16);
+            const dropMaterial = new THREE.MeshPhysicalMaterial({
+                color: 0x004d00, // Sama väri kuin nesteellä
+                metalness: 0,
+                roughness: 0,
+                transmission: 1.0,
+                transparent: true,
+                ior: 1.33
+            });
+            const drop = new THREE.Mesh(dropGeometry, dropMaterial);
+            
+            // Haetaan pisaran aloituspiste tipEnd-apupisteestä
+            const startPos = new THREE.Vector3();
+            tipEnd.getWorldPosition(startPos); 
+            drop.position.copy(startPos);
+
+            scene.add(drop);
+            drops.push(drop);
+
+            // Animate drop falling
+            new TWEEN.Tween(drop.position)
+                .to({ y: drop.position.y - 10 * scaleFactor }, 1500)
+                .easing(TWEEN.Easing.Quadratic.In)
+                .onComplete(() => {
+                    scene.remove(drop);
+                    drops = drops.filter(d => d !== drop);
+                })
+                .start();
+        }
+
+        function startDroppingAnimation() {
+            if (isAnimating) return;
+            isAnimating = true;
+
+            const liftHeight = (shoulderHeight + neckHeight + 1) * scaleFactor;
+            const sideMove = 3 * scaleFactor;
+            const animDuration = 1000;
+            
+            const originalPipettePos = pipetteGroup.position.clone();
+
+            const tweenUp = new TWEEN.Tween(pipetteGroup.position)
+                .to({ y: originalPipettePos.y + liftHeight }, animDuration)
+                .easing(TWEEN.Easing.Cubic.Out);
+
+            const tweenSide = new TWEEN.Tween(pipetteGroup.position)
+                .to({ x: originalPipettePos.x + sideMove }, animDuration)
+                .easing(TWEEN.Easing.Sinusoidal.InOut);
+
+            // Nesteen pinnan lasku -animaatio
+            const liquidDropDuration = 1500;
+            const originalLiquidHeight = pipetteLiquidMesh.geometry.parameters.height;
+
+            const liquidTween = new TWEEN.Tween({ scaleY: 1, posY: originalLiquidPos.y })
+                .to({ scaleY: 0.01, posY: originalLiquidPos.y - originalLiquidHeight / 2 }, liquidDropDuration)
+                .easing(TWEEN.Easing.Linear.None)
+                .onUpdate((obj) => {
+                    pipetteLiquidMesh.scale.y = obj.scaleY;
+                    pipetteLiquidMesh.position.y = obj.posY;
+                });
+
+
+            const tweenBack = new TWEEN.Tween(pipetteGroup.position)
+                .to({ x: originalPipettePos.x }, animDuration)
+                .easing(TWEEN.Easing.Sinusoidal.InOut);
+
+            const tweenDown = new TWEEN.Tween(pipetteGroup.position)
+                .to({ y: originalPipettePos.y }, animDuration)
+                .easing(TWEEN.Easing.Cubic.In);
+
+            // Ketjutetaan animaatiot
+            tweenUp.chain(tweenSide);
+            
+            tweenSide.onComplete(() => {
+                // Tiputusvaihe
+                let dropCount = 0;
+                const dropInterval = setInterval(() => {
+                    if (dropCount < 3) {
+                        createDrop();
+                        dropCount++;
+                    } else {
+                        clearInterval(dropInterval);
+                    }
+                }, 400);
+                
+                liquidTween.start(); // Aloita nesteen pinnan lasku
+            });
+
+            liquidTween.onComplete(() => {
+                 setTimeout(() => { // Pieni viive ennen paluuta
+                    tweenBack.start();
+                }, 500);
+            });
+
+            tweenBack.chain(tweenDown);
+
+            tweenDown.onComplete(() => {
+                // Nollaa pipetin nesteen tila
+                pipetteLiquidMesh.scale.y = 1;
+                pipetteLiquidMesh.position.copy(originalLiquidPos);
+                isAnimating = false;
+            });
+
+            tweenUp.start();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            TWEEN.update();
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+
+</html>
