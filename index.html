@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Three.js Laboratorio Scene</title>
+    <!-- pages-build: 2025-10-22T12:00:00Z -->
     <style>
         :root {
             --lab-bg-top: #f6f9fb;
@@ -39,7 +40,7 @@
             top: 10px;
             width: 100%;
             text-align: center;
-            color: #1f2933; /* dark grey for light background */
+            color: #ffffff; /* make initial info text white */
             font-family: monospace;
             font-size: 16px;
             text-shadow: 0 1px 0 rgba(255,255,255,0.6);
@@ -52,6 +53,7 @@
     <canvas id="bg-noise"></canvas>
     <div id="info">Klikkaa letkua valitaksesi/irrottaaksesi sen. Klikkaa kaasupulloa valitaksesi kaasu. Klikkaa jauheastiaa valitaksesi kiinteä aine. 
         Klikkaa lusikkaan ja sekoitussauvaan käyttääksesi niitä. Voit myös avata/sulkea kaasupullon ja kaasutusastian ventiileitä Näppäimet: R = aloita alusta.</div>
+    <button id="resetLabBtn" style="position:absolute; top:10px; right:10px; z-index:11; padding:8px 12px; background:#2563eb; color:#fff; border:none; border-radius:6px; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,0.2);">Aloita alusta</button>
     <div id="gasMenu" style="display:none; position:absolute; top:50px; left:50%; transform:translateX(-50%); background:#222; color:#fff; padding:12px; border-radius:8px; z-index:10;">
         <label for="gasSelect">Valitse kaasu:</label>
         <select id="gasSelect">
@@ -170,6 +172,7 @@ let gasLabelSprite = null;
 
     // Add notifier for UI messages
     const notify = createNotifier(document.getElementById('info'));
+    try { window._notify = notify; } catch {}
     // Initialize menus (gas + solid)
     initMenus({
         onGasChange: (val) => {
@@ -207,7 +210,7 @@ let gasLabelSprite = null;
 
         // --- Dekantterilasi (Beaker) ---
     // Dekantterilasin luonti erillisestä moduulista
-    const { beakerGroup, beakerNozzle, water, unifiedWater, updateWater, waterHeight, meniscus, meniscusUnder, meniscusPositions, originalMeniscusPositions, waterSurfaceY, beakerRadius, beakerHeight, addIndicatorAt, stepIndicator, addAcidicGas, resetWater, addDiffusionSource, particlesUpdate, addBasicPowderEffect, revealPendingPH, addEventPlume, clearEvents, getPostMixColorHex, diffusionManager } = createDekantterilasi(scene);
+    const { beakerGroup, beakerNozzle, water, unifiedWater, updateWater, waterHeight, meniscus, meniscusUnder, meniscusPositions, originalMeniscusPositions, waterSurfaceY, beakerRadius, beakerHeight, addIndicatorAt, stepIndicator, addAcidicGas, resetWater, addDiffusionSource, particlesUpdate, addBasicPowderEffect, revealPendingPH, addEventPlume, clearEvents, getPostMixColorHex, diffusionManager, noteSolidAdded, precipitateUpdate, startPrecipitateSwirl } = createDekantterilasi(scene);
     // Rebind bubbles manager now that beaker is available
     const bubblesManagerReal = createBubblesManager({ scene, beakerGroup, beakerRadius, waterSurfaceY });
     // Replace placeholder reference
@@ -215,7 +218,7 @@ let gasLabelSprite = null;
     window._bubbles = bubblesManagerReal;
     
     // Make beaker globally available for keyboard controls
-    window.currentBeaker = { addIndicatorAt, stepIndicator, addAcidicGas, resetWater, addBasicPowderEffect, revealPendingPH, addEventPlume, clearEvents, getPostMixColorHex, updateWater, unifiedWater, getChemState: (() => ({ hasIndicator: (unifiedWater?.material?.uniforms?.uIndicatorEnabled?.value ?? 0) > 0.5, pHScore: (unifiedWater?.material?.uniforms?.uPHScore?.value ?? 0) })) };
+    window.currentBeaker = { addIndicatorAt, stepIndicator, addAcidicGas, resetWater, addBasicPowderEffect, revealPendingPH, addEventPlume, clearEvents, getPostMixColorHex, updateWater, unifiedWater, noteSolidAdded, startPrecipitateSwirl, precipitateUpdate, getChemState: (() => ({ hasIndicator: (unifiedWater?.material?.uniforms?.uIndicatorEnabled?.value ?? 0) > 0.5, pHScore: (unifiedWater?.material?.uniforms?.uPHScore?.value ?? 0) })) };
 
     // --- Kiinteä aineen purkki (moduulista) ---
     const solidJar = createSolidJar({ position: new THREE.Vector3(beakerGroup.position.x + 3.0, 0.7, beakerGroup.position.z - 1.5), solidCode: state.selectedSolid });
@@ -326,6 +329,14 @@ let gasLabelSprite = null;
                             beakerGroup.getWorldPosition(center);
                             powder.startSwirl({ centerWorld: center, durationSec: 2.2, strength: 0.48, inward: 0.10, drag: 0.85, dissolve: true, dissolveDurationSec: 2.0 });
                         }
+                        // Always stir precipitate similarly (no dissolve)
+                        try {
+                            const center = new THREE.Vector3();
+                            beakerGroup.getWorldPosition(center);
+                            if (window.currentBeaker && typeof window.currentBeaker.startPrecipitateSwirl === 'function') {
+                                window.currentBeaker.startPrecipitateSwirl({ centerWorld: center, durationSec: 2.2, strength: 0.48, inward: 0.10, drag: 0.85 });
+                            }
+                        } catch {}
                     }, 1700);
                     setTimeout(() => {
                         const center = new THREE.Vector3();
@@ -378,6 +389,8 @@ let gasLabelSprite = null;
                                 if (window.currentBeaker && typeof window.currentBeaker.addBasicPowderEffect === 'function') {
                                     window.currentBeaker.addBasicPowderEffect();
                                 }
+                                // Register which solid was added so reactions (e.g., CaO + SO2) can occur
+                                try { if (window.currentBeaker && typeof window.currentBeaker.noteSolidAdded === 'function') window.currentBeaker.noteSolidAdded(state.selectedSolid); } catch {}
                             }
                             try { if (notify) notify.info('Sekoita, jotta väri näkyy.', { duration: 2600 }); } catch {}
                             try {
@@ -481,13 +494,15 @@ let gasLabelSprite = null;
                             flowOn: true,
                             elapsedTime,
                             selectedGas: state.selectedGas,
-                            onAcidic: () => window.currentBeaker && window.currentBeaker.addAcidicGas()
+                            onAcidic: () => window.currentBeaker && window.currentBeaker.addAcidicGas && window.currentBeaker.addAcidicGas(state.selectedGas)
                         });
                     }
                 } catch {} },
                 ({ elapsedTime }) => { try { bubblesManagerReal.update(elapsedTime); } catch {} },
                 // Unified water update (diffusion + ripple time)
                 ({ deltaTime, elapsedTime }) => { try { if (typeof updateWater === 'function') updateWater(deltaTime, elapsedTime); } catch {} },
+                // Precipitate particle update (from beaker)
+                ({ deltaTime }) => { try { if (typeof precipitateUpdate === 'function') precipitateUpdate(deltaTime); } catch {} },
                 ({ deltaTime }) => { try { if (typeof particlesUpdate === 'function') particlesUpdate(deltaTime); } catch {} },
                 ({ deltaTime }) => { try { spatula?.update?.(deltaTime); } catch {} },
                 ({ deltaTime }) => { try { powder?.update?.(deltaTime); } catch {} },
@@ -512,6 +527,52 @@ let gasLabelSprite = null;
                 loop.start();
             });
         };
+
+        // Reset button: palauttaa laboratorion alkutilaan
+        const resetBtn = document.getElementById('resetLabBtn');
+        if (resetBtn) {
+            resetBtn.addEventListener('click', () => {
+                try { window.currentBeaker && window.currentBeaker.resetWater && window.currentBeaker.resetWater(); } catch {}
+                try { powder && powder.clear && powder.clear(); } catch {}
+                try {
+                    // Irrota letku ja palauta lepoon
+                    state.isHoseAttached = false;
+                    state.isHoseSelected = false;
+                    state.hoseEndPoint.copy(state.hoseRestingPoint);
+                    state.hoseMesh = state.updateHose(state.hoseEndPoint, state.isHoseAttached);
+                    state.hoseMesh && state.hoseMesh.material && state.hoseMesh.material.color && state.hoseMesh.material.color.set(0x666666);
+                } catch {}
+                try {
+                    // Sulje venttiilit
+                    state.isGasValveOpen = false;
+                    const valveHandle = scene.getObjectByName('gasValveHandle');
+                    if (valveHandle) valveHandle.rotation.y = 0;
+                    state.isBeakerTapOpen = false;
+                } catch {}
+                try {
+                    // Pipetti alas ja täyteen
+                    const assembly = dropperBottleGroup.getObjectByName('pipetteAssembly');
+                    if (assembly) assembly.position.y = bottleHeight;
+                    isPipetteRaised = false; isAnimatingDropper = false;
+                    if (window.pipetteLiquid) refillPipetteLiquid(window.pipetteLiquid);
+                } catch {}
+                try {
+                    // Palauta sauva ja lusikka pöydälle kuten alussa
+                    const tableY = 0.01;
+                    const restRod = new THREE.Vector3(2.0, tableY, 2.0);
+                    const yawRod = -Math.PI * 0.15;
+                    sauva && sauva.placeOnTable && sauva.placeOnTable(restRod, { yaw: yawRod, tiltX: 0, tiltZ: 0.02 });
+                    if (spatula && typeof spatula.placeOnTable === 'function') {
+                        const offsetFromJar = new THREE.Vector3(1.4, 0, 1.0);
+                        const restPos = new THREE.Vector3().copy(solidJar.group.position).add(offsetFromJar);
+                        restPos.y = tableY;
+                        const yaw = Math.PI * 0.28, tiltX = -0.02, tiltZ = 0.06;
+                        spatula.placeOnTable(restPos, { yaw, tiltX, tiltZ });
+                    }
+                } catch {}
+                try { notify && notify.info && notify.info('Alustettu', { duration: 1200 }); } catch {}
+            });
+        }
 
     </script>
 </body>
