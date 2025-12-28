@@ -262,7 +262,9 @@ export function createKaasupullo(scene) {
 	const valveHandle = new THREE.Group();
 	valveHandle.name = 'gasValveHandle';
 	const valveBaseGeo = new THREE.CylinderGeometry(0.2, 0.2, 0.1, 16);
-	const valveBase = new THREE.Mesh(valveBaseGeo, nozzleMat);
+	// Use spoon-like bright metal (same style as spatula) for the valve parts
+	const spoonLikeMat = new THREE.MeshStandardMaterial({ color: 0xc0c0c0, metalness: 0.8, roughness: 0.2 });
+	const valveBase = new THREE.Mesh(valveBaseGeo, spoonLikeMat);
 	valveBase.rotation.x = Math.PI/2;
 	const valveTapGeo = new THREE.BoxGeometry(0.8, 0.15, 0.15);
 	// Punainen maalattu metalli: clearcoat + hienovarainen oranssinkuori + reuna-kulumaa
@@ -275,21 +277,8 @@ export function createKaasupullo(scene) {
 		edgeWearIntensity: 0.22,
 		seed: 10071
 	});
-	const valveTapMat = new THREE.MeshPhysicalMaterial({
-		color: 0xffffff,
-		map: paint.colorMap,
-		metalness: 0.0,
-		metalnessMap: paint.metalnessMap,
-		roughness: 0.45,
-		roughnessMap: paint.roughnessMap,
-		normalMap: paint.normalMap,
-		normalScale: new THREE.Vector2(0.12, 0.12),
-		clearcoat: 1.0,
-		clearcoatRoughness: 0.22,
-		clearcoatNormalMap: paint.normalMap,
-		clearcoatNormalScale: new THREE.Vector2(0.08, 0.08)
-	});
-	const valveTap = new THREE.Mesh(valveTapGeo, valveTapMat);
+	// Replace handle material with spoon-like metal (env-map independent)
+	const valveTap = new THREE.Mesh(valveTapGeo, spoonLikeMat);
 	valveTap.rotation.y = Math.PI/2;
 	valveTap.position.z = 0.0;
 	valveHandle.add(valveBase, valveTap);
